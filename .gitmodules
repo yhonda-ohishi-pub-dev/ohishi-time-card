@@ -1,3 +1,6 @@
 [submodule "timecard-rust-api"]
 	path = timecard-rust-api
 	url = https://github.com/yhonda-ohishi-pub-dev/timecard-rust-api.git
+[submodule "timecard-cf-worker"]
+	path = timecard-cf-worker
+	url = https://github.com/yhonda-ohishi-pub-dev/timecard-cf-worker.git

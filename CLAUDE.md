@@ -372,6 +372,84 @@ ssh -t pi@172.18.21.90 "docker exec -it app_dev sh -c 'cd /app && npm run dev'"
 
 - Pythonクライアント（wxpython_test）は `https://172.18.21.90:3150` に接続
 - devサーバーが起動していないとSocket.IO接続失敗
+- **注意**: 実機は本番(3050)に接続している可能性あり（要確認）
+
+## Socket.IO実装（app-ref）
+
+### サーバー側（app.ts）
+
+```typescript
+// ポート3050でHTTPS + Socket.IOサーバー起動
+const io = new Server(httpsServer);
+
+io.on('connection', (socket) => {
+  console.log('connected');
+
+  // クライアントからのメッセージ受信
+  socket.on("message", (message) => {
+    // ステータスに応じて処理
+    if (message.status == "tmp inserted wo pic") {
+      // driversテーブルから名前を取得してブロードキャスト
+      io.emit("hello", JSON.stringify(message));
+    } else {
+      io.emit("hello", JSON.stringify(message));
+    }
+  });
+
+  io.emit("hello", "from server");  // 接続時に送信
+});
+```
+
+### クライアント側JavaScript
+
+| ファイル | 用途 | Socket.IO使用 |
+|----------|------|---------------|
+| `ic.js` | IC打刻一覧 | `io()` で接続、`hello`イベント受信で行追加 |
+| `delete_ic.js` | IC削除 | Web NFC読取→`message`送信、`hello`受信 |
+| `non_reg_ic.js` | 未登録IC一覧 | `hello`イベント受信で行追加 |
+| `tenko.js` | 点呼写真一覧 | `hello`イベント受信で写真表示更新 |
+| `client.js` | カメラ/マイク | Socket.IO使用なし（WebRTC用） |
+
+### イベントフロー
+
+```
+[Pythonクライアント]
+    ↓ socket.emit("message", {status, data})
+[Node.js app.ts:3050]
+    ↓ io.emit("hello", JSON.stringify(message))
+[ブラウザJS] ← iio.on("hello", callback)
+```
+
+### messageイベントのステータス一覧
+
+| status | 送信元 | 処理内容 |
+|--------|--------|----------|
+| `tmp inserted` | Python | 体温+写真データ、base64変換してブロードキャスト |
+| `tmp inserted by ic` | Python | IC認証後の体温データ |
+| `tmp inserted by fing` | Python | 指紋認証後の体温データ |
+| `tmp inserted wo pic` | Python | 写真なし体温データ、driversから名前取得 |
+| `insert ic_log` | Python | ICログ記録 |
+| `delete_ic` | ブラウザ | IC削除要求（Web NFC経由） |
+| `start_connect` | Python | 接続開始通知 |
+
+### helloイベント受信時の処理
+
+| ページ | status | 処理 |
+|--------|--------|------|
+| `/ic` | `insert ic_log` | テーブル先頭に行追加 |
+| `/delete_ic` | `delete_ic` | 削除確認ログ出力 |
+| `/ic_non_reg` | `insert ic_log` (iid=null) | 未登録IC行追加 |
+| `/` (点呼) | `tmp inserted` | 写真行追加 |
+| `/` (点呼) | `tmp inserted by ic/fing` | 写真追加・認証方法表示 |
+| `/` (点呼) | `tmp inserted wo pic` | ID・名前表示 |
+
+### テスト用クライアント（client.ts）
+
+```typescript
+// npm run server で実行
+const socket = io("http://localhost:3000");
+socket.on("hello", (message) => console.log(message));
+```
 
 ## 新規実装の方針
 

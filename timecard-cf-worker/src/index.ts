@@ -758,12 +758,13 @@ function getIcRegisterPage(): string {
 
           if (result.success) {
             showResult(
-              'ICカード登録完了!<br>' +
+              'ICカード登録予約完了!<br>' +
               'IC ID: ' + result.ic_id + '<br>' +
-              'ドライバー: ' + result.driver_name + ' (ID: ' + result.driver_id + ')',
+              'ドライバー: ' + result.driver_name + ' (ID: ' + result.driver_id + ')<br>' +
+              '<strong>次回ICカードタッチ時に登録が完了します</strong>',
               'success'
             );
-            showStatus('登録完了しました。続けて登録する場合は再度スキャンしてください。', 'success');
+            showStatus('登録予約完了。続けて登録する場合は再度スキャンしてください。', 'success');
           } else {
             showResult('登録失敗: ' + result.message, 'danger');
           }

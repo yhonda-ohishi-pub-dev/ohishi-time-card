@@ -30,3 +30,6 @@ dist/
 target/
 *.log
 logs/
+
+# Deploy scripts
+deploy-*.sh

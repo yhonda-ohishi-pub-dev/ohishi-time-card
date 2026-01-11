@@ -210,6 +210,7 @@ ohishi-time-card/
 | GET | `/api/ic_non_reg` | 未登録IC一覧取得 |
 | POST | `/api/ic_non_reg/register` | 未登録IC登録 |
 | POST | `/api/ic/register_direct` | Web NFC IC登録 |
+| POST | `/api/ic/delete` | IC削除（Socket.IO経由） |
 | GET | `/api/ic_log` | ICログ取得 |
 | GET | `/api/ic_log_list` | 打刻一覧取得 |
 
@@ -221,6 +222,9 @@ RDB_HOST=172.18.21.90
 RDB_USER=dbuser
 RDB_PASSWORD=***
 RDB_NAME=db
+
+# Socket.IO接続（既存Node.jsサーバー）
+SOCKETIO_URL=https://172.18.21.90:3050
 
 # Cloudflare Workers
 GRPC_API_URL=https://...

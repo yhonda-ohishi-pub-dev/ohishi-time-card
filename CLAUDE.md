@@ -140,6 +140,49 @@ deleted = 1 に更新
 | 論理削除 | `deleted = 1` → 登録完了時に設定 |
 | 物理削除 | 未実装（定期バッチが必要） |
 
+### IC削除（/delete_ic）の方針
+
+Android Chrome + Web NFCでICカードを削除する機能。IC登録と同様、Pythonクライアント経由でローカルSQLiteも更新する。
+
+**設計方針**: Web NFCで読み取ったIC IDをSocket.IOでブロードキャスト。Pythonクライアントが受信し、ローカルSQLiteとMariaDB両方から論理削除する。
+
+```
+[Web NFC削除]
+    ↓ WebSocket送信: {status: 'delete_ic', ic: <IC_ID>}
+[Cloudflare Worker]
+    ↓ ブロードキャスト: {status: 'delete_ic', ic: <IC_ID>}
+[Pythonクライアント] ← Socket.IOで受信
+    ↓
+database.delete_ic() → SQLite ic_id.deleted = タイムスタンプ
+    ↓
+dbmaria.delete_ic() → MariaDB ic_id.deleted = 1
+```
+
+**理由**: IC登録と同じく、Pythonクライアントのローカル`database_main.db`（SQLite）からも削除が必要。Web NFCでMariaDBのみ削除すると、Pythonクライアントでは「登録済み」と判定されてしまう。
+
+**ic_idテーブルの削除方式**:
+| DB | 削除方式 | 値 |
+|----|----------|-----|
+| SQLite | 論理削除 | `deleted = datetime('now','localtime')` |
+| MariaDB | 論理削除 | `deleted = 1` |
+
+**現状の実装状況**:
+| コンポーネント | 状態 | 備考 |
+|---------------|------|------|
+| Web NFC UI | 実装済み | `/delete_ic` ページ |
+| WebSocketブロードキャスト | 実装済み | Cloudflare Worker |
+| Rust API `/api/ic/delete` | 実装済み | Socket.IOで`message`イベント送信 |
+| SQLite削除 | 実装済み | `database.py:delete_ic()` |
+| MariaDB削除 | 未実装 | `dbmaria.py`に関数なし |
+| Pythonクライアント受信 | 実装済み | `sock.py:on_hello()`で`delete_ic`を処理 |
+
+**Rust API設定**:
+- 環境変数 `SOCKETIO_URL` でSocket.IOサーバーを指定
+- 例: `SOCKETIO_URL=https://172.18.21.90:3050`
+
+**TODO**:
+1. `dbmaria.py`に`delete_ic()`関数を追加（MariaDB同期用）
+
 ### DB問い合わせ手順
 
 #### ローカルSQLite（設定・ログ用）
@@ -277,6 +320,58 @@ npx tsc          # TypeScriptコンパイル
 - `rpassw` - MySQL rootパスワード
 - `user` - MySQLユーザー
 - `passw` - MySQLパスワード
+
+## 本番サーバー（172.18.21.90）
+
+### VPN接続
+
+```bash
+# IPsec + L2TP VPN接続
+sudo ipsec up ohishi
+sudo systemctl start xl2tpd
+echo "c ohishi" | sudo tee /var/run/xl2tpd/l2tp-control
+
+# ルート追加（必要に応じて）
+sudo ip route add 172.18.21.0/24 dev ppp0
+```
+
+### SSH接続
+
+```bash
+ssh pi@172.18.21.90
+```
+
+### Dockerコンテナ構成
+
+| コンテナ | イメージ | HTTP | Socket.IO | 用途 |
+|---------|---------|------|-----------|------|
+| **app** | node:16 | 3000 | **3050** | 本番環境 |
+| **app_dev** | node:16 | 3100 | **3150** | 開発環境 |
+| db | mariadb:10.6.2 | - | 3306 | MariaDB |
+| phpmyadmin | phpmyadmin:5.1.1 | 8888 | - | DB管理UI |
+
+### devサーバー起動
+
+app_devコンテナはデフォルトでNode.jsインタラクティブシェルのみ起動。devサーバーを手動で起動する必要あり：
+
+```bash
+# SSH経由でdevサーバー起動
+ssh pi@172.18.21.90 "docker exec -d app_dev sh -c 'cd /app && npx tsc && npm run dev'"
+
+# 起動確認
+ssh pi@172.18.21.90 "docker exec app_dev ss -tlnp | grep 3050"
+# → LISTEN *:3050 が表示されればOK
+```
+
+**注意**: `docker exec -d`で起動するとログが`docker logs`に出力されない。ログ確認が必要な場合はフォアグラウンドで実行：
+```bash
+ssh -t pi@172.18.21.90 "docker exec -it app_dev sh -c 'cd /app && npm run dev'"
+```
+
+### Pythonクライアント接続先
+
+- Pythonクライアント（wxpython_test）は `https://172.18.21.90:3150` に接続
+- devサーバーが起動していないとSocket.IO接続失敗
 
 ## 新規実装の方針
 

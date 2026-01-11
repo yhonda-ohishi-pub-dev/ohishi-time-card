@@ -33,3 +33,4 @@ logs/
 
 # Deploy scripts
 deploy-*.sh
+app-ref-git/

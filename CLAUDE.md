@@ -59,11 +59,14 @@ user='dbuser'
 password='***'  # 実際のパスワードはdbmaria.pyを参照
 database='db'
 
-# make_lib/sock.py - Socket.IO接続
-SocketIOClient('https://172.18.21.90:3150', '/')
+# make_lib/sock.py - Socket.IO接続（参考コードは3150だが実際は3050に接続）
+SocketIOClient('https://172.18.21.90:3150', '/')  # ← 参考コードの値
+# 実際の運用: https://172.18.21.90:3050 に接続中（確認済み）
 # SSL検証は無効化（self-signed証明書対応）
 socketio.Client(ssl_verify=False)
 ```
+
+**注意**: `wxpython_test-ref`のソースコードは3150になっているが、実際のPythonクライアントは3050（rust-apiのSocket.IOサーバー）に接続している。これは確認済み。
 
 ### IC登録処理フロー
 
@@ -472,6 +475,13 @@ Rust バックエンド + TypeScript Cloudflare フロントエンドで実装�
 - **データベース**: `sqlx`（MySQL）
 - **非同期ランタイム**: `tokio`
 
+### Cloudflare Worker設定
+
+環境変数:
+- `GRPC_API_URL` - Rust APIのgRPC-Webエンドポイント（設定済み・テスト済み）
+  - 本番: Cloudflareダッシュボードで設定
+  - 開発: `.dev.vars`ファイルに設定（例: `GRPC_API_URL=https://time-rust-api-pi.mtamaramu.com/`）
+
 ## 開発環境
 
 ### LSP対応
@@ -488,8 +498,8 @@ Rust バックエンド + TypeScript Cloudflare フロントエンドで実装�
 `handover/` フォルダへ引き継ぎ書を作成する。
 
 ### ファイル形式
-- **保存先**: `handover/YYYY-MM-DD.md`（日付形式）
-- **同日に複数回**: `handover/YYYY-MM-DD-2.md` のように連番
+- **保存先**: `handover/YYYY-MM-DD-HHMM.md`（日時形式、例: `2026-01-11-1555.md`）
+- **同日に複数回**: 時刻で区別される
 
 ### 記載内容（チェックリスト形式）
 

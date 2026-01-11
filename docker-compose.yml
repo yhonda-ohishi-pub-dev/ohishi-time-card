@@ -51,9 +51,11 @@ services:
       RDB_PASSWORD: ${MYSQL_PASSWORD:-timecard}
       RDB_NAME: ${MYSQL_DATABASE:-db}
       GRPC_PORT: 50051
+      HTTP_PORT: 8080
       LOG_LEVEL: info
     ports:
       - "50051:50051"
+      - "8080:8080"
     depends_on:
       db:
         condition: service_healthy

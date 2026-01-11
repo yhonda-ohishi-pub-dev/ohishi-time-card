@@ -7,6 +7,7 @@ handover/
 
 # Environment
 .env
+.dev.vars
 
 # IDE
 .vscode/
@@ -18,3 +19,11 @@ handover/
 # Reference repos (already git repos)
 app-ref/
 nodeJS_test-ref/
+
+# Node.js
+node_modules/
+.wrangler/
+
+# Build artifacts
+dist/
+*.log

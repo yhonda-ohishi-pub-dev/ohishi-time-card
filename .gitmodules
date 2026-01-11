@@ -1,0 +1,3 @@
+[submodule "timecard-rust-api"]
+	path = timecard-rust-api
+	url = https://github.com/yhonda-ohishi/timecard-rust-api.git

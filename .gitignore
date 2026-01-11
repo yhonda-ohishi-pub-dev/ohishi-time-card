@@ -1,0 +1,20 @@
+# Database
+db.sql
+maria_data/
+
+# Handover docs
+handover/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Reference repos (already git repos)
+app-ref/
+nodeJS_test-ref/

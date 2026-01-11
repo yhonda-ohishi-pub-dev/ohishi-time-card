@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  db:
+    container_name: timecard-db
+    image: mariadb:10.11
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-db}
+      MYSQL_USER: ${MYSQL_USER:-timecard}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-timecard}
+    volumes:
+      - ./maria_data:/var/lib/mysql
+      - ./db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3307:3306"
+    networks:
+      - timecard-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      timeout: 20s
+      retries: 10
+      interval: 10s
+
+  phpmyadmin:
+    container_name: timecard-phpmyadmin
+    image: phpmyadmin:5.2
+    restart: always
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 300M
+    ports:
+      - "8889:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - timecard-network
+
+  api:
+    container_name: timecard-api
+    build:
+      context: ./timecard-rust-api
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      RDB_HOST: db
+      RDB_USER: ${MYSQL_USER:-timecard}
+      RDB_PASSWORD: ${MYSQL_PASSWORD:-timecard}
+      RDB_NAME: ${MYSQL_DATABASE:-db}
+      GRPC_PORT: 50051
+      LOG_LEVEL: info
+    ports:
+      - "50051:50051"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - timecard-network
+
+networks:
+  timecard-network:
+    driver: bridge

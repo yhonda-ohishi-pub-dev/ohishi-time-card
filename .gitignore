@@ -19,6 +19,7 @@ handover/
 # Reference repos (already git repos)
 app-ref/
 nodeJS_test-ref/
+wxpython_test-ref/
 
 # Node.js
 node_modules/
@@ -26,4 +27,5 @@ node_modules/
 
 # Build artifacts
 dist/
+target/
 *.log

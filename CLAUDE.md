@@ -28,9 +28,186 @@ ICカードリーダー等の既存クライアントは変更せず、中継サ
 
 ### 参考リポジトリ
 
-参考用に以下の2つのリポジトリを`-ref`サフィックスでクローン済み：
+参考用に以下のリポジトリを`-ref`サフィックスでクローン済み：
 - `app-ref/` - 既存のNode.js/TypeScript/Express実装（Socket.IO使用）
 - `nodeJS_test-ref/` - MariaDBとphpMyAdminのDocker Compose構成
+- `wxpython_test-ref/` - ICカードリーダー/指紋認証クライアント（Python/wxPython）
+
+## wxpython_test-ref（ICカードリーダークライアント）
+
+Windows上で動作するICカードリーダー・指紋認証クライアントアプリケーション。
+
+### 依存関係
+
+主要な依存ライブラリ（`requirements.txt`より）：
+- **GUI**: `wxPython==4.2.0`
+- **ICカード**: `pyscard==2.0.5`, `PySmartCard==1.4.1`
+- **データベース**:
+  - `sqlite3`（標準ライブラリ） - ローカル設定・ログ保存
+  - `mysql-connector-python==8.0.32` - MariaDB接続
+- **リアルタイム通信**:
+  - `python-socketio==5.8.0` - Socket.IOクライアント
+  - `websocket-client==1.5.1` - WebSocket通信
+- **その他**: `opencv-contrib-python`（カメラ）, `pyttsx3`（音声合成）, `sounddevice`/`soundfile`（音声再生）
+
+### 接続先設定
+
+```python
+# make_lib/dbmaria.py - MariaDB接続
+host='172.18.21.90'
+user='dbuser'
+password='***'  # 実際のパスワードはdbmaria.pyを参照
+database='db'
+
+# make_lib/sock.py - Socket.IO接続
+SocketIOClient('https://172.18.21.90:3150', '/')
+# SSL検証は無効化（self-signed証明書対応）
+socketio.Client(ssl_verify=False)
+```
+
+### IC登録処理フロー
+
+`make_lib/printobserver.py` → `make_lib/reg_ic.py` → `make_lib/dbmaria.py`
+
+1. **ICカード検知**（`printobserver.py`）
+   - `pyscard`の`CardMonitor`でスマートカード挿入を監視
+   - カード種別判定:
+     - `driver_license` - 運転免許証（有効期限・残り回数取得）
+     - `car_inspection` - 車検証
+     - `other` - その他ICカード（Felica等）
+
+2. **IC登録判定**（`reg_ic.py`の`register_ic_id()`）
+   ```
+   運転免許証で社員ID取得可能？
+   └→ YES: 免許証有効期限から社員IDを特定
+   └→ NO: 登録済みIC？
+          └→ YES: ic_idテーブルから社員ID取得
+          └→ NO: MariaDBのic_non_regedで30分以内に登録済み？
+                 └→ YES: registered_idを使用してIC登録
+                 └→ NO: 未登録ICとしてic_non_regedに記録、再タッチ要求
+   ```
+
+3. **ICログ保存**（`reg_ic.py`の`enroll_ic_db()`）
+   - SQLite（database_other.db）とMariaDB両方に保存
+   - Socket.IOで`insert ic_log`イベント送信
+
+### 未登録IC確認処理
+
+`make_lib/dbmaria.py`の処理：
+
+```python
+# 未登録IC検索（30分以内の記録を確認）
+def find_ic_id(data: list):
+    sql = "select * from ic_non_reged where id=%s and `datetime`> current_timestamp + interval -30 minute limit 1"
+    # registered_idがあれば、そのIDでIC登録を実行
+
+# 未登録IC記録
+def insert_ic_non_reg(data: str):
+    sql = "INSERT INTO ic_non_reged (id) VALUES (%s) ON DUPLICATE KEY UPDATE `datetime`=CURRENT_TIMESTAMP() + INTERVAL 9 HOUR, registered_id=NULL"
+```
+
+**未登録IC登録の流れ**:
+1. ICカードタッチ → 未登録判定 → `ic_non_reged`に記録
+2. Webアプリで社員番号を`registered_id`に登録
+3. 再度ICタッチ → `find_ic_id()`で登録済み確認 → `ic_id`テーブルに登録
+
+### Web NFC登録（/ic_register）の方針
+
+Android Chrome + Web NFCでICカードを直接登録する機能。
+
+**設計方針**: `ic_non_reged`テーブルの`registered_id`を設定するのみ。`ic_id`への登録はPythonクライアント経由で行う。
+
+```
+[Web NFC登録]
+    ↓
+ic_non_reged に INSERT/UPDATE（registered_id = driver_id, deleted = 0）
+    ↓
+[Pythonクライアントで次回ICタッチ]
+    ↓
+find_ic_id() で registered_id を発見
+    ↓
+ic_id テーブルに登録（MariaDB + ローカルSQLite 両方）
+    ↓
+deleted = 1 に更新
+```
+
+**理由**: Pythonクライアントのローカル`database_main.db`（SQLite）にも`ic_id`が反映される必要があるため。Web NFCで`ic_id`に直接登録するとMariaDBのみに書き込まれ、Pythonクライアントでは「未登録」と判定されてしまう。
+
+**ic_non_regedの削除要領**:
+| 処理 | 条件 |
+|------|------|
+| 時間制限 | `datetime`から30分経過 → 検索対象外 |
+| 論理削除 | `deleted = 1` → 登録完了時に設定 |
+| 物理削除 | 未実装（定期バッチが必要） |
+
+### DB問い合わせ手順
+
+#### ローカルSQLite（設定・ログ用）
+- `database_main.db` - IC登録、指紋ID、設定
+- `database_other.db` - ログ、画像データ、体温データ
+
+```python
+# make_lib/database.py
+import sqlite3
+conn = sqlite3.connect('database_main.db')
+# テーブル: ic_id, user_finger_ids, user_finger_data, config, Log
+```
+
+#### リモートMariaDB（本番データ用）
+```python
+# make_lib/dbmaria.py
+import mysql.connector
+cnx = mysql.connector.connect(
+    user='dbuser',
+    password='***',  # 実際のパスワードはdbmaria.pyを参照
+    host='172.18.21.90',
+    database='db'
+)
+```
+
+主要な操作関数:
+| 関数名 | 用途 | テーブル |
+|--------|------|----------|
+| `insert_ic_id()` | IC-社員ID登録 | ic_id |
+| `enroll_ic_db()` | ICログ記録 | ic_log |
+| `insert_ic_non_reg()` | 未登録IC記録 | ic_non_reged |
+| `find_ic_id()` | 未登録IC検索 | ic_non_reged |
+| `insert_tmp()` | 体温データ登録 | tmp_data |
+| `insert_cam()` | カメラ画像保存 | pic_data |
+| `finger_log()` | 指紋認証ログ | finger_log |
+
+### Socket.IOイベント送信
+
+`make_lib/sock.py`からサーバーへ送信するイベント:
+```python
+# イベント名: 'message'
+# データ構造:
+{
+    "ip": "クライアントIP",
+    "status": "tmp inserted wo pic" | "insert ic_log" | ...,
+    "message": "",
+    "data": {
+        "time": "ISO形式日時",
+        "id": 社員ID,
+        "tmp": "体温",
+        ...
+    }
+}
+```
+
+### モジュール構成（make_lib/）
+
+| ファイル | 役割 |
+|----------|------|
+| `printobserver.py` | ICカード監視・読み取り |
+| `reg_ic.py` | IC登録ロジック |
+| `database.py` | SQLite操作 |
+| `dbmaria.py` | MariaDB操作 |
+| `sock.py` | Socket.IOクライアント |
+| `cam.py` | カメラ撮影 |
+| `sound.py` | 音声再生 |
+| `driver.py` | ドライバー情報取得 |
+| `tmp.py` | 体温データ管理 |
 
 ## データベーススキーマ
 
@@ -121,6 +298,12 @@ Rust バックエンド + TypeScript Cloudflare フロントエンドで実装�
 - **WebSocket**: `tokio-tungstenite`
 - **データベース**: `sqlx`（MySQL）
 - **非同期ランタイム**: `tokio`
+
+## 開発環境
+
+### LSP対応
+- **TypeScript**: typescript-language-server
+- **Rust**: rust-analyzer
 
 ## 引き継ぎ書（Handover）
 

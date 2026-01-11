@@ -68,13 +68,17 @@ async function serveStaticContent(request: Request, env: Env, path: string): Pro
   let filePath = path;
 
   if (path === '/' || path === '/index.html') {
-    filePath = '/index.html';
+    filePath = '/ic-log-list.html';
   } else if (path === '/drivers' || path === '/drivers.html') {
     filePath = '/drivers.html';
   } else if (path === '/ic_non_reg' || path === '/ic-non-reg.html') {
     filePath = '/ic-non-reg.html';
   } else if (path === '/delete_ic' || path === '/delete-ic.html') {
     filePath = '/delete-ic.html';
+  } else if (path === '/ic_log_list' || path === '/ic-log-list.html') {
+    filePath = '/ic-log-list.html';
+  } else if (path === '/ic_register' || path === '/ic-register.html') {
+    filePath = '/ic-register.html';
   }
 
   // For development, return inline HTML
@@ -110,10 +114,11 @@ async function serveStaticContent(request: Request, env: Env, path: string): Pro
 
 function getPageContent(path: string): string | null {
   const pages: Record<string, string> = {
-    '/index.html': getIndexPage(),
     '/drivers.html': getDriversPage(),
     '/ic-non-reg.html': getIcNonRegPage(),
     '/delete-ic.html': getDeleteIcPage(),
+    '/ic-log-list.html': getIcLogListPage(),
+    '/ic-register.html': getIcRegisterPage(),
   };
   return pages[path] || null;
 }
@@ -151,9 +156,10 @@ function getBaseTemplate(title: string, content: string, scripts: string = ''): 
 <body>
   <div class="container">
     <nav class="nav-links">
-      <a href="/" class="btn btn-outline-primary">タイムカード</a>
+      <a href="/" class="btn btn-outline-primary">打刻一覧</a>
       <a href="/drivers" class="btn btn-outline-primary">ドライバー</a>
       <a href="/ic_non_reg" class="btn btn-outline-primary">未登録IC</a>
+      <a href="/ic_register" class="btn btn-outline-success">IC登録</a>
       <a href="/delete_ic" class="btn btn-outline-primary">IC削除</a>
     </nav>
     <div id="ws-status" class="ws-status ws-disconnected">切断中</div>
@@ -431,6 +437,9 @@ function getIndexPage(): string {
 function getDriversPage(): string {
   const content = `
     <h1>ドライバー一覧</h1>
+    <div class="mb-3">
+      <button id="reloadBtn" class="btn btn-warning">外部DBから更新</button>
+    </div>
     <table id="sample" class="table table-bordered">
       <thead>
         <tr>
@@ -449,9 +458,11 @@ function getDriversPage(): string {
     <script>
       const tableElem = document.getElementById('sample');
       const loadingElem = document.getElementById('loading');
+      const reloadBtn = document.getElementById('reloadBtn');
 
       async function loadDrivers() {
         loadingElem.classList.add('show');
+        tableElem.tBodies[0].innerHTML = '';
         try {
           const response = await fetch('/api/drivers');
           const drivers = await response.json();
@@ -467,6 +478,31 @@ function getDriversPage(): string {
         }
       }
 
+      async function reloadDrivers() {
+        if (!confirm('外部DBからドライバー情報を更新しますか？')) return;
+        loadingElem.classList.add('show');
+        reloadBtn.disabled = true;
+        try {
+          const response = await fetch('/api/drivers/reload', { method: 'POST' });
+          if (!response.ok) throw new Error('更新に失敗しました');
+          const drivers = await response.json();
+          tableElem.tBodies[0].innerHTML = '';
+          drivers.forEach((driver) => {
+            const tr = tableElem.tBodies[0].insertRow(-1);
+            tr.insertCell(0).textContent = driver.id;
+            tr.insertCell().textContent = driver.name;
+          });
+          alert('更新完了: ' + drivers.length + '件');
+        } catch (e) {
+          console.error('Failed to reload drivers:', e);
+          alert('更新に失敗しました: ' + e.message);
+        } finally {
+          loadingElem.classList.remove('show');
+          reloadBtn.disabled = false;
+        }
+      }
+
+      reloadBtn.addEventListener('click', reloadDrivers);
       loadDrivers();
     </script>
   `;
@@ -634,6 +670,275 @@ function getDeleteIcPage(): string {
   `;
 
   return getBaseTemplate('IC削除', content, scripts);
+}
+
+function getIcRegisterPage(): string {
+  const content = `
+    <h1>ICカード登録</h1>
+    <div class="alert alert-info">
+      <strong>注意:</strong> この機能はAndroid版Chromeでのみ動作します（HTTPS必須）
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="mb-3">
+          <label for="driverId" class="form-label">ドライバーID</label>
+          <input type="number" id="driverId" class="form-control" placeholder="ドライバーIDを入力" required>
+        </div>
+        <button id="scanButton" class="btn btn-primary btn-lg w-100" disabled>
+          ICカードをスキャン
+        </button>
+      </div>
+    </div>
+
+    <div id="scanStatus" class="mb-3" style="display: none;">
+      <div class="alert" id="statusAlert">
+        <span id="statusText"></span>
+      </div>
+    </div>
+
+    <div id="result" class="mb-3"></div>
+
+    <div class="card bg-light">
+      <div class="card-body">
+        <h5 class="card-title">手順</h5>
+        <ol>
+          <li>ドライバーIDを入力してください</li>
+          <li>「ICカードをスキャン」ボタンを押してください</li>
+          <li>ICカードをスマートフォンにタッチしてください（1回目）</li>
+          <li>同じICカードをもう一度タッチしてください（2回目・確認用）</li>
+          <li>2回とも同じICカードであれば登録されます</li>
+        </ol>
+      </div>
+    </div>
+  `;
+
+  const scripts = `
+    <script>
+      const driverIdInput = document.getElementById('driverId');
+      const scanButton = document.getElementById('scanButton');
+      const scanStatus = document.getElementById('scanStatus');
+      const statusAlert = document.getElementById('statusAlert');
+      const statusText = document.getElementById('statusText');
+      const resultDiv = document.getElementById('result');
+
+      let firstRead = null;
+      let ndef = null;
+
+      // Enable button when driver ID is entered
+      driverIdInput.addEventListener('input', () => {
+        scanButton.disabled = !driverIdInput.value.trim();
+      });
+
+      function showStatus(message, type) {
+        scanStatus.style.display = 'block';
+        statusAlert.className = 'alert alert-' + type;
+        statusText.innerHTML = message;
+      }
+
+      function showResult(message, type) {
+        resultDiv.innerHTML = '<div class="alert alert-' + type + '">' + message + '</div>';
+      }
+
+      function resetState() {
+        firstRead = null;
+        scanButton.disabled = false;
+        driverIdInput.disabled = false;
+      }
+
+      async function registerIc(icId, driverId) {
+        try {
+          const response = await fetch('/api/ic/register_direct', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ic_id: icId, driver_id: parseInt(driverId) })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            showResult(
+              'ICカード登録完了!<br>' +
+              'IC ID: ' + result.ic_id + '<br>' +
+              'ドライバー: ' + result.driver_name + ' (ID: ' + result.driver_id + ')',
+              'success'
+            );
+            showStatus('登録完了しました。続けて登録する場合は再度スキャンしてください。', 'success');
+          } else {
+            showResult('登録失敗: ' + result.message, 'danger');
+          }
+        } catch (e) {
+          console.error('Registration error:', e);
+          showResult('エラーが発生しました: ' + e.message, 'danger');
+        }
+      }
+
+      scanButton.addEventListener('click', async () => {
+        const driverId = driverIdInput.value.trim();
+        if (!driverId) {
+          alert('ドライバーIDを入力してください');
+          return;
+        }
+
+        if (!('NDEFReader' in window)) {
+          alert('このブラウザはNFC読み取りに対応していません。Android版Chromeをお使いください。');
+          return;
+        }
+
+        try {
+          ndef = new NDEFReader();
+          await ndef.scan();
+
+          firstRead = null;
+          showStatus('1回目のスキャン: ICカードをタッチしてください...', 'info');
+          resultDiv.innerHTML = '';
+          scanButton.disabled = true;
+          driverIdInput.disabled = true;
+
+          ndef.addEventListener('readingerror', () => {
+            showStatus('NFCタグを読み取れませんでした。別のタグをお試しください。', 'warning');
+          });
+
+          ndef.addEventListener('reading', ({ serialNumber }) => {
+            const serial = serialNumber.replace(/:/g, '').toUpperCase();
+
+            if (firstRead === null) {
+              // First read
+              firstRead = serial;
+              showStatus(
+                '1回目読み取り完了: ' + serial + '<br>' +
+                '確認のため、同じICカードをもう一度タッチしてください...',
+                'warning'
+              );
+            } else {
+              // Second read
+              if (firstRead === serial) {
+                // Match - register the IC
+                showStatus('2回とも同じICカードを確認しました。登録中...', 'info');
+                registerIc(serial, driverId);
+                resetState();
+              } else {
+                // Mismatch - reset
+                showStatus(
+                  '1回目と2回目のICカードが異なります。<br>' +
+                  '1回目: ' + firstRead + '<br>' +
+                  '2回目: ' + serial + '<br>' +
+                  '最初からやり直してください。',
+                  'danger'
+                );
+                resetState();
+              }
+            }
+          });
+        } catch (error) {
+          console.error('NFC scan error:', error);
+          alert('NFCスキャンエラー: ' + error);
+          resetState();
+        }
+      });
+    </script>
+  `;
+
+  return getBaseTemplate('IC登録', content, scripts);
+}
+
+function getIcLogListPage(): string {
+  const content = `
+    <h1>打刻一覧</h1>
+    <div class="mb-3">
+      <label for="limitSelect" class="form-label">表示件数:</label>
+      <select id="limitSelect" class="form-select" style="max-width: 150px;">
+        <option value="50">50件</option>
+        <option value="100" selected>100件</option>
+        <option value="200">200件</option>
+        <option value="500">500件</option>
+      </select>
+    </div>
+    <table id="sample" class="table table-bordered table-striped">
+      <thead class="table-dark">
+        <tr>
+          <th class="text-center">日時</th>
+          <th class="text-center">氏名</th>
+          <th class="text-center">カードID</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+    </div>
+  `;
+
+  const scripts = `
+    <script>
+      const tableElem = document.getElementById('sample');
+      const loadingElem = document.getElementById('loading');
+      const limitSelect = document.getElementById('limitSelect');
+
+      async function loadIcLogList() {
+        loadingElem.classList.add('show');
+        // Clear existing rows
+        tableElem.tBodies[0].innerHTML = '';
+
+        try {
+          const limit = limitSelect.value;
+          const response = await fetch('/api/ic_log_list?limit=' + limit);
+          const logs = await response.json();
+
+          logs.forEach((log) => {
+            const tr = tableElem.tBodies[0].insertRow(-1);
+
+            // Date cell
+            const dateCell = tr.insertCell(0);
+            const date = new Date(log.date);
+            const dateStr = date.getFullYear() + '/' +
+                          String(date.getMonth() + 1).padStart(2, '0') + '/' +
+                          String(date.getDate()).padStart(2, '0') + ' ' +
+                          String(date.getHours()).padStart(2, '0') + ':' +
+                          String(date.getMinutes()).padStart(2, '0') + ':' +
+                          String(date.getSeconds()).padStart(2, '0');
+            dateCell.textContent = dateStr;
+            dateCell.className = 'text-center';
+
+            // Name cell
+            const nameCell = tr.insertCell();
+            nameCell.textContent = log.driver_name || '(未登録)';
+            nameCell.className = 'text-center';
+            if (!log.driver_name) {
+              nameCell.style.color = '#999';
+            }
+
+            // Card ID cell
+            const cardCell = tr.insertCell();
+            cardCell.textContent = log.card_id || '';
+            cardCell.className = 'text-center text-muted';
+            cardCell.style.fontSize = '0.85em';
+          });
+        } catch (e) {
+          console.error('Failed to load IC log list:', e);
+          alert('データの取得に失敗しました');
+        } finally {
+          loadingElem.classList.remove('show');
+        }
+      }
+
+      // Handle limit change
+      limitSelect.addEventListener('change', loadIcLogList);
+
+      // Real-time updates
+      window.tcWs.on('hello', (data) => {
+        if (data.status && data.status.includes('ic')) {
+          // Reload when new IC event received
+          loadIcLogList();
+        }
+      });
+
+      // Initial load
+      loadIcLogList();
+    </script>
+  `;
+
+  return getBaseTemplate('打刻一覧', content, scripts);
 }
 
 function getStyles(): string {

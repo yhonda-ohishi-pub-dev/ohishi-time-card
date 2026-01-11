@@ -19,6 +19,11 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return jsonResponse(drivers);
     }
 
+    if (path === '/api/drivers/reload' && request.method === 'POST') {
+      const drivers = await grpcClient.reloadDrivers();
+      return jsonResponse(drivers);
+    }
+
     if (path === '/api/driver_id' && request.method === 'GET') {
       const driverId = url.searchParams.get('driver_id');
       if (!driverId) {
@@ -48,6 +53,28 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
     if (path === '/api/ic_log' && request.method === 'GET') {
       const logs = await grpcClient.getIcLog();
+      return jsonResponse(logs);
+    }
+
+    // Direct IC registration via Web NFC
+    if (path === '/api/ic/register_direct' && request.method === 'POST') {
+      const body = await request.json() as { ic_id: string; driver_id: number };
+      // Forward to Rust HTTP API (port 8080)
+      const backendUrl = env.GRPC_API_URL.replace(/:\d+$/, '').replace(/\/$/, '');
+      const httpApiUrl = `${backendUrl}:8080/api/ic/register_direct`;
+      const response = await fetch(httpApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      return jsonResponse(result, response.status);
+    }
+
+    // 最新のタイムカード記録（ドライバー名付き）
+    if (path === '/api/ic_log_list' && request.method === 'GET') {
+      const limit = parseInt(url.searchParams.get('limit') || '100');
+      const logs = await grpcClient.getLatestIcLogWithDriver(limit);
       return jsonResponse(logs);
     }
 

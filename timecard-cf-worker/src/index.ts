@@ -77,8 +77,6 @@ async function serveStaticContent(request: Request, env: Env, path: string): Pro
     filePath = '/delete-ic.html';
   } else if (path === '/ic_log_list' || path === '/ic-log-list.html') {
     filePath = '/ic-log-list.html';
-  } else if (path === '/ic_register' || path === '/ic-register.html') {
-    filePath = '/ic-register.html';
   }
 
   // For development, return inline HTML
@@ -118,7 +116,6 @@ function getPageContent(path: string): string | null {
     '/ic-non-reg.html': getIcNonRegPage(),
     '/delete-ic.html': getDeleteIcPage(),
     '/ic-log-list.html': getIcLogListPage(),
-    '/ic-register.html': getIcRegisterPage(),
   };
   return pages[path] || null;
 }
@@ -159,7 +156,6 @@ function getBaseTemplate(title: string, content: string, scripts: string = ''): 
       <a href="/" class="btn btn-outline-primary">打刻一覧</a>
       <a href="/drivers" class="btn btn-outline-primary">ドライバー</a>
       <a href="/ic_non_reg" class="btn btn-outline-primary">未登録IC</a>
-      <a href="/ic_register" class="btn btn-outline-success">IC登録</a>
       <a href="/delete_ic" class="btn btn-outline-primary">IC削除</a>
     </nav>
     <div id="ws-status" class="ws-status ws-disconnected">切断中</div>
@@ -513,6 +509,30 @@ function getDriversPage(): string {
 function getIcNonRegPage(): string {
   const content = `
     <h1>未登録ICカード</h1>
+
+    <!-- Web NFC登録セクション -->
+    <div class="card mb-4 border-success">
+      <div class="card-header bg-success text-white">
+        <strong>Web NFC登録</strong> (Android Chrome)
+      </div>
+      <div class="card-body">
+        <div class="row align-items-end">
+          <div class="col-auto">
+            <label for="nfcDriverId" class="form-label">ドライバーID</label>
+            <input type="number" id="nfcDriverId" class="form-control" placeholder="ID入力" style="width: 120px;">
+          </div>
+          <div class="col-auto">
+            <button id="nfcScanBtn" class="btn btn-success" disabled>
+              ICカードをスキャン
+            </button>
+          </div>
+          <div class="col" id="nfcStatus"></div>
+        </div>
+        <div id="nfcResult" class="mt-2"></div>
+      </div>
+    </div>
+
+    <h5>未登録IC一覧</h5>
     <table id="sample" class="table table-bordered">
       <thead>
         <tr>
@@ -533,8 +553,88 @@ function getIcNonRegPage(): string {
       const tableElem = document.getElementById('sample');
       const loadingElem = document.getElementById('loading');
 
+      // Web NFC elements
+      const nfcDriverId = document.getElementById('nfcDriverId');
+      const nfcScanBtn = document.getElementById('nfcScanBtn');
+      const nfcStatus = document.getElementById('nfcStatus');
+      const nfcResult = document.getElementById('nfcResult');
+      let firstRead = null;
+
+      // Enable NFC button when driver ID entered
+      nfcDriverId.addEventListener('input', () => {
+        nfcScanBtn.disabled = !nfcDriverId.value.trim();
+      });
+
+      // NFC Scan button click
+      nfcScanBtn.addEventListener('click', async () => {
+        const driverId = nfcDriverId.value.trim();
+        if (!driverId) return;
+
+        if (!('NDEFReader' in window)) {
+          alert('このブラウザはNFC読み取りに対応していません。Android版Chromeをお使いください。');
+          return;
+        }
+
+        try {
+          const ndef = new NDEFReader();
+          await ndef.scan();
+
+          firstRead = null;
+          nfcStatus.innerHTML = '<span class="badge bg-info">1回目: ICカードをタッチ</span>';
+          nfcResult.innerHTML = '';
+          nfcScanBtn.disabled = true;
+          nfcDriverId.disabled = true;
+
+          ndef.addEventListener('reading', async ({ serialNumber }) => {
+            const serial = serialNumber.replace(/:/g, '').toUpperCase();
+
+            if (firstRead === null) {
+              firstRead = serial;
+              nfcStatus.innerHTML = '<span class="badge bg-warning text-dark">2回目: 同じICをもう一度タッチ (' + serial + ')</span>';
+            } else {
+              if (firstRead === serial) {
+                nfcStatus.innerHTML = '<span class="badge bg-info">登録中...</span>';
+                try {
+                  const res = await fetch('/api/ic/register_direct', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ic_id: serial, driver_id: parseInt(driverId) })
+                  });
+                  const result = await res.json();
+                  if (result.success) {
+                    nfcResult.innerHTML = '<div class="alert alert-success py-2">' +
+                      result.driver_name + ' (ID:' + result.driver_id + ') に登録予約完了<br>' +
+                      '<small>次回ICタッチ時に登録されます</small></div>';
+                    nfcStatus.innerHTML = '<span class="badge bg-success">完了</span>';
+                    loadNonRegIc(); // Reload table
+                  } else {
+                    nfcResult.innerHTML = '<div class="alert alert-danger py-2">' + result.message + '</div>';
+                    nfcStatus.innerHTML = '';
+                  }
+                } catch (e) {
+                  nfcResult.innerHTML = '<div class="alert alert-danger py-2">エラー: ' + e.message + '</div>';
+                }
+                firstRead = null;
+                nfcScanBtn.disabled = false;
+                nfcDriverId.disabled = false;
+              } else {
+                nfcStatus.innerHTML = '<span class="badge bg-danger">ICが異なります。やり直してください</span>';
+                firstRead = null;
+                nfcScanBtn.disabled = false;
+                nfcDriverId.disabled = false;
+              }
+            }
+          });
+        } catch (e) {
+          alert('NFCエラー: ' + e);
+          nfcScanBtn.disabled = false;
+          nfcDriverId.disabled = false;
+        }
+      });
+
       async function loadNonRegIc() {
         loadingElem.classList.add('show');
+        tableElem.tBodies[0].innerHTML = '';
         try {
           const response = await fetch('/api/ic_non_reg');
           const items = await response.json();
@@ -551,28 +651,31 @@ function getIcNonRegPage(): string {
 
             // Driver registration cell
             const regCell = tr.insertCell();
-            const form = document.createElement('form');
-            form.className = 'd-flex';
-            form.onsubmit = (e) => {
-              e.preventDefault();
-              registerIc(item.id, form.querySelector('input').value);
-            };
+            if (item.registered_id) {
+              regCell.innerHTML = '<span class="badge bg-success">予約済: ID ' + item.registered_id + '</span>';
+            } else {
+              const form = document.createElement('form');
+              form.className = 'd-flex';
+              form.onsubmit = (e) => {
+                e.preventDefault();
+                registerIc(item.id, form.querySelector('input').value);
+              };
 
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'form-control form-control-sm';
-            input.name = 'driver_id';
-            input.placeholder = 'ドライバーID';
-            if (item.registered_id) input.value = item.registered_id;
-            form.appendChild(input);
+              const input = document.createElement('input');
+              input.type = 'text';
+              input.className = 'form-control form-control-sm';
+              input.name = 'driver_id';
+              input.placeholder = 'ドライバーID';
+              form.appendChild(input);
 
-            const btn = document.createElement('button');
-            btn.type = 'submit';
-            btn.className = 'btn btn-sm btn-primary ms-2';
-            btn.textContent = '登録';
-            form.appendChild(btn);
+              const btn = document.createElement('button');
+              btn.type = 'submit';
+              btn.className = 'btn btn-sm btn-primary ms-2';
+              btn.textContent = '登録';
+              form.appendChild(btn);
 
-            regCell.appendChild(form);
+              regCell.appendChild(form);
+            }
           });
         } catch (e) {
           console.error('Failed to load non-registered IC:', e);

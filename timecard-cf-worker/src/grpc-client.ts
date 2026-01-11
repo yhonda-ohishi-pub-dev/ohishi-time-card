@@ -12,6 +12,7 @@ import {
   TimeRangeRequestSchema,
   UpdateICNonRegRequestSchema,
   ICLogListSchema,
+  ICLogWithDriverListSchema,
 } from './gen/timecard_pb';
 import { EmptySchema } from '@bufbuild/protobuf/wkt';
 
@@ -189,6 +190,17 @@ export class GrpcWebClient {
     return [{ id: response.id, name: response.name }];
   }
 
+  async reloadDrivers(): Promise<Array<{ id: number; name: string }>> {
+    const response = await this.callGrpcWeb(
+      'timecard.DriverService',
+      'Reload',
+      EmptySchema,
+      DriverListSchema,
+      {}
+    );
+    return response.drivers.map((d: { id: number; name: string }) => ({ id: d.id, name: d.name }));
+  }
+
   // PicData Service
   async getPicTmp(limit: number = 30, startDate?: string): Promise<Array<{
     date: string;
@@ -274,6 +286,36 @@ export class GrpcWebClient {
       ic_id: log.id,
       driver_id: log.iid ? parseInt(log.iid) : null,
       datetime: log.date,
+    }));
+  }
+
+  // 最新のICログをドライバー名付きで取得
+  async getLatestIcLogWithDriver(limit: number = 100): Promise<Array<{
+    card_id: string;
+    type: string;
+    date: string;
+    driver_name: string | undefined;
+    machine_ip: string;
+  }>> {
+    const response = await this.callGrpcWeb(
+      'timecard.ICLogService',
+      'GetLatestWithDriver',
+      PaginationRequestSchema,
+      ICLogWithDriverListSchema,
+      { limit }
+    );
+    return response.logs.map((log: {
+      id: string;
+      type: string;
+      date: string;
+      driverName?: string;
+      machineIp: string;
+    }) => ({
+      card_id: log.id,
+      type: log.type,
+      date: log.date,
+      driver_name: log.driverName,
+      machine_ip: log.machineIp,
     }));
   }
 }
